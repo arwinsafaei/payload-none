@@ -6,6 +6,12 @@ const COMPONENT_SCALE = 1.35;
 const COMPONENT_MARGIN = 2.5;
 const RAMP_MARGIN = 4.0;
 const MAX_PLACEMENT_ATTEMPTS = 30;
+const CHUNK_SIZE = 48;
+const CHUNK_RADIUS = 1;
+const GRID_SPACING = 3;
+const BOOST_DRAIN_TIME = 5;
+const BOOST_RECHARGE_TIME = 3;
+const BOOST_RECHARGE_WAIT = 1;
 
 // 1 Scene Setup
 
@@ -37,6 +43,55 @@ renderer.toneMappingExposure = 1.15;
 
 game.appendChild(renderer.domElement);
 
+game.style.position = "relative";
+
+const boostMeter = document.createElement("div");
+
+boostMeter.innerHTML = `
+    <svg viewBox="0 0 100 100">
+        <circle class="boost-track" cx="50" cy="50" r="42"></circle>
+        <circle class="boost-progress" cx="50" cy="50" r="42"></circle>
+    </svg>
+`;
+
+boostMeter.style.cssText = `
+    position: absolute;
+    right: 30px;
+    bottom: 50px;
+    width: 76px;
+    height: 76px;
+    pointer-events: none;
+`;
+
+const boostStyle = document.createElement("style");
+
+boostStyle.textContent = `
+    .boost-track,
+    .boost-progress {
+        fill: none;
+        stroke-width: 7;
+    }
+
+    .boost-track {
+        stroke: rgba(255,255,255,0.15);
+    }
+
+    .boost-progress {
+        stroke: #55e68a;
+        stroke-linecap: round;
+        stroke-dasharray: 263.9;
+        stroke-dashoffset: 0;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+        transition: stroke 0.2s, stroke-dashoffset 0.08s;
+    }
+`;
+
+document.head.appendChild(boostStyle);
+game.appendChild(boostMeter);
+
+const boostProgress = boostMeter.querySelector(".boost-progress");
+
 // 2 Lighting
 
 const ambient = new THREE.HemisphereLight(0xceac01, 0x172817, 2);
@@ -50,36 +105,9 @@ scene.add(sun);
 
 // 3 Environment
 
-const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(200, 200),
-    new THREE.MeshStandardMaterial({
-        color: 0x286b3b,
-        roughness: 0.85,
-        metalness: 0.12
-    })
-);
-
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.05;
-ground.receiveShadow = true;
-scene.add(ground);
-
-const grid = new THREE.GridHelper(
-    200,
-    100,
-    0x65bd72,
-    0x397c49
-);
-
-grid.position.y = 0.015;
-grid.material.transparent = true;
-grid.material.opacity = 0.2;
-scene.add(grid);
-
 const traceMaterial = new THREE.MeshStandardMaterial({
     color: 0x164b2b,
     emissive: 0x092b16,
-    roughness: 0.4,
     metalness: 0.4
 });
 
@@ -89,136 +117,12 @@ const padMaterial = new THREE.MeshStandardMaterial({
     roughness: 0.25
 });
 
-const traceWidth = 0.13;
-const traceHeight = 0.035;
-const gridSpacing = 3;
-
-const traceEdges = new Set();
-const traceNodes = new Map();
-
-function nodeKey(x, z) {
-    return `${x},${z}`;
-}
-
-function addTraceNode(x, z) {
-    const key = nodeKey(x, z);
-
-    if (!traceNodes.has(key)) {
-        traceNodes.set(key, {
-            x,
-            z,
-            connections: 0
-        });
-    }
-
-    return traceNodes.get(key);
-}
-
-function addTraceEdge(a, b) {
-    const keyA = nodeKey(a.x, a.z);
-    const keyB = nodeKey(b.x, b.z);
-
-    const edgeKey = [keyA, keyB].sort().join("|");
-
-    if (traceEdges.has(edgeKey)) return;
-
-    traceEdges.add(edgeKey);
-
-    a.connections++;
-    b.connections++;
-
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-
-    const length = Math.hypot(dx, dz);
-
-    const trace = new THREE.Mesh(
-        new THREE.BoxGeometry(traceWidth, traceHeight, length + 0.02),
-        traceMaterial
-    );
-
-    trace.position.set(
-        (a.x + b.x) / 2,
-        0.025,
-        (a.z + b.z) / 2
-    );
-
-    trace.rotation.y = Math.atan2(dx, dz);
-
-    scene.add(trace);
-}
-
-const startingNode = addTraceNode(0, 0);
-const networkNodes = [startingNode];
-
-const directions = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-    [1, 1],
-    [-1, 1],
-    [1, -1],
-    [-1, -1]
-];
-
-for (let route = 0; route < 65; route++) {
-    let current = networkNodes[Math.floor(Math.random() * networkNodes.length)];
-
-    const steps = 3 + Math.floor(Math.random() * 9);
-
-    let previousDirection = null;
-
-    for (let step = 0; step < steps; step++) {
-        let direction;
-
-        do {
-            direction = directions[Math.floor(Math.random() * directions.length)];
-        } while (
-            previousDirection &&
-            direction[0] === -previousDirection[0] &&
-            direction[1] === -previousDirection[1]
-        );
-        
-        previousDirection = direction;
-
-        const next = addTraceNode(
-            THREE.MathUtils.clamp(
-                current.x + direction[0] * gridSpacing,
-                -45,
-                45
-            ),
-            THREE.MathUtils.clamp(
-                current.z + direction[1] * gridSpacing,
-                -45,
-                45
-            )
-        );
-
-        if (next === current) break;
-
-        addTraceEdge(current, next);
-
-        current = next;
-        networkNodes.push(current);
-    }
-}
-
-const padGeometry = new THREE.CylinderGeometry(
-    traceWidth * 0.7,
-    traceWidth * 0.7,
-    0.045,
-    12
-);
-
-for (const node of traceNodes.values()) {
-    if (node.connections < 2) continue;
-
-    const pad = new THREE.Mesh(padGeometry, padMaterial);
-
-    pad.position.set(node.x, 0.035, node.z);
-    scene.add(pad);
-}
+const rampMaterial = new THREE.MeshStandardMaterial({
+    color: 0x899b98,
+    metalness: 0.95,
+    roughness: 0.2,
+    emissive: 0x102020
+});
 
 const componentMaterials = {
     chip: new THREE.MeshStandardMaterial({
@@ -245,7 +149,36 @@ const componentMaterials = {
     })
 };
 
-function createComponent(x, z, type) {
+const ramps = [];
+const componentHazards = [];
+const loadedChunks = new Map();
+
+function hashString(value) {
+    let hash = 2166136261;
+
+    for (let i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return hash >>> 0;
+}
+
+function makeRandom(seed) {
+    let state = seed >>> 0;
+
+    return function () {
+        state += 0x6D2B79F5;
+
+        let value = state;
+        value = Math.imul(value ^ (value >>> 15), value | 1);
+        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+
+        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function createComponent(parent, x, z, type, random) {
     const component = new THREE.Group();
 
     const groundY = -0.05;
@@ -264,7 +197,7 @@ function createComponent(x, z, type) {
     );
 
     component.scale.setScalar(scale);
-    component.rotation.y = Math.random() * Math.PI;
+    component.rotation.y = random() * Math.PI;
 
     if (type === "chip") {
         const body = new THREE.Mesh(
@@ -285,7 +218,7 @@ function createComponent(x, z, type) {
                 pin.position.set(
                     side * 0.68,
                     0.08,
-                    -0.32 + 1 * 0.16
+                    -0.32 + i * 0.16
                 );
 
                 component.add(pin);
@@ -324,9 +257,9 @@ function createComponent(x, z, type) {
 
         const top = new THREE.Mesh(
             new THREE.CylinderGeometry(0.23, 0.23, 0.025, 16),
-            componentMaterials.silver
+            componentMaterials.capacitor
         );
-
+        
         top.position.y = 0.665;
         component.add(top);
     }
@@ -338,140 +271,419 @@ function createComponent(x, z, type) {
         }
     });
 
-    scene.add(component);
+    parent.add(component);
+
+    componentHazards.push({
+        x: parent.position.x + x,
+        z: parent.position.z + z,
+        radius: ({
+            chip: 1.1,
+            resistor: 0.5,
+            capacitor: 0.4
+        }[type] * COMPONENT_SCALE) + 0.75,
+        hit: false,
+        chunk: parent
+    });
+
     return component;
 }
 
-const occupiedAreas = [];
+function createChunk(chunkX, chunkZ) {
+    const chunkKey = `${chunkX},${chunkZ}`;
 
-function findPlacement(radius, margin, min = -42, max = 42) {
-    for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {
-        const x = min + Math.random() * (max - min);
-        const z = min + Math.random() * (max - min);
+    if (loadedChunks.has(chunkKey)) return;
 
-        const overlaps = occupiedAreas.some(area => {
-            const dx = x - area.x;
-            const dz = z - area.z;
+    const chunkSeed = hashString(chunkKey);
+    const random = makeRandom(chunkSeed);
 
-            const distance = Math.hypot(dx, dz);
-            const requiredDistance = radius + area.radius + Math.max(margin, area.margin);
+    const chunk = new THREE.Group;
 
-            return distance < requiredDistance;
-        });
+    chunk.position.set(
+        chunkX * CHUNK_SIZE,
+        0,
+        chunkZ * CHUNK_SIZE
+    );
 
-        if (!overlaps) {
-            return {x, z, radius, margin};
+    scene.add(chunk);
+
+    const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE),
+        new THREE.MeshStandardMaterial({
+            color: 0x286b3b,
+            roughness: 0.85,
+            metalness: 0.12
+        })
+    );
+
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    ground.receiveShadow = true;
+    chunk.add(ground);
+
+    const grid = new THREE.GridHelper(
+        CHUNK_SIZE,
+        CHUNK_SIZE / GRID_SPACING,
+        0x65bd72,
+        0x397c49
+    );
+
+    grid.position.y = 0.015;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.2;
+    chunk.add(grid);
+
+    const traceNodes = new Map();
+    const traceEdges = new Set();
+
+    function nodeKey(x, z) {
+        return `${x}, ${z}`;
+    }
+
+    function addTraceNode(x, z) {
+        const key = nodeKey(x, z);
+
+        if (!traceNodes.has(key)) {
+            traceNodes.set(key, {
+                x,
+                z,
+                connections: 0
+            });
+        }
+
+        return traceNodes.get(key);
+    }
+
+    function addTraceEdge(a, b) {
+        const keyA = nodeKey(a.x, a.z);
+        const keyB = nodeKey(b.x, b.z);
+
+        const edgeKey = [keyA, keyB].sort().join("|");
+
+        if (traceEdges.has(edgeKey)) return;
+
+        traceEdges.add(edgeKey);
+        a.connections++;
+        b.connections++;
+
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const length = Math.hypot(dx, dz);
+
+        const trace = new THREE.Mesh(
+            new THREE.BoxGeometry(0.12, 0.035, length + 0.02),
+            traceMaterial
+        );
+
+        trace.position.set(
+            (a.x + b.x) / 2,
+            0.025,
+            (a.z + b.z) / 2
+        );
+
+        trace.rotation.y = Math.atan2(dx, dz);
+        chunk.add(trace);
+    }
+
+    const networkNodes = [];
+
+    const directions = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [-1, 1],
+        [1, -1],
+        [-1, -1]
+    ];
+
+    for (let route = 0; route < 40; route++) {
+        let current = addTraceNode(
+            -21 + Math.floor(random() * 15) * GRID_SPACING,
+            -21 + Math.floor(random() * 15) * GRID_SPACING
+        );
+
+        networkNodes.push(current);
+
+        const steps = 3 + Math.floor(random() * 7);
+        let previousDirection = null;
+
+        for (let step = 0; step < steps; step++) {
+            let direction;
+
+            do {
+                direction = directions[
+                    Math.floor(random() * directions.length)
+                ];
+            } while (
+                previousDirection &&
+                direction[0] === -previousDirection[0] &&
+                direction[1] === -previousDirection[1]
+            );
+
+            previousDirection = direction;
+
+            const next = addTraceNode(
+                THREE.MathUtils.clamp(
+                    current.x + direction[0] * GRID_SPACING,
+                    -21,
+                    21
+                ),
+                THREE.MathUtils.clamp(
+                    current.z + direction[1] * GRID_SPACING,
+                    -21,
+                    21
+                )
+            );
+
+            if (next === current) break;
+
+            addTraceEdge(current, next);
+            current = next;
+            networkNodes.push(current);
         }
     }
 
-    return null;
-}
+    for (let i = 0; i <= 16; i++) {
+        const offset = -24 + i * GRID_SPACING;
 
-const componentTypes = [
-    {type: "chip", radius: 1.1},
-    {type: "resistor", radius: 0.5},
-    {type: "capacitor", radius: 0.4}
-];
+        for (const side of [-1, 1]) {
+            const worldX = chunkX * CHUNK_SIZE + side * 24;
+            const worldZ = chunkZ * CHUNK_SIZE + offset;
 
-for (let i = 0; i < 100; i++) {
-    const selected = componentTypes[
-        Math.floor(Math.random() * componentTypes.length)
+            const edgeSeed = hashString(`V:${worldX}:${worldZ}`);
+
+            if (edgeSeed % 3 === 0) {
+                const edge = addTraceNode(side * 24, offset);
+                const inside = addTraceNode(side * 21, offset);
+
+                addTraceEdge(edge, inside);
+            }
+        }
+
+        for (const side of [-1, 1]) {
+            const worldX = chunkX * CHUNK_SIZE + offset;
+            const worldZ = chunkZ * CHUNK_SIZE + side * 24;
+
+            const edgeSeed = hashString(`H:${worldX}:${worldZ}`);
+
+            if (edgeSeed % 3 === 0) {
+                const edge = addTraceNode(offset, side * 24);
+                const inside = addTraceNode(offset, side * 21);
+
+                addTraceEdge(edge, inside);
+            }
+        }
+    }
+
+    const padGeometry = new THREE.CylinderGeometry(
+        0.13 * 0.7,
+        0.13 * 0.7,
+        0.045,
+        12
+    );
+
+    for (const node of traceNodes.values()) {
+        if (node.connections < 2) continue;
+
+        const pad = new THREE.Mesh(padGeometry, padMaterial);
+
+        pad.position.set(node.x, 0.035, node.z);
+        chunk.add(pad);
+    }
+
+    const occupiedAreas = [];
+
+    function findPlacement(radius, margin, min = -19, max = 19) {
+        for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt++) {
+            const x = min + random() * (max - min);
+            const z = min + random() * (max - min);
+
+            const overlaps = occupiedAreas.some(area => {
+                const distance = Math.hypot(
+                    x - area.x,
+                    z - area.z
+                );
+
+                const requiredDistance =
+                    radius +
+                    area.radius +
+                    Math.max(margin, area.margin);
+
+                return distance < requiredDistance;
+            });
+
+            if (!overlaps) {
+                return {x, z, radius, margin};
+            }
+        }
+
+        return null;
+    }
+
+    const componentTypes = [
+        {type: "chip", radius: 1.1},
+        {type: "resistor", radius: 0.5},
+        {type: "capacitor", radius: 0.4}
     ];
 
-    const placement = findPlacement(
-        selected.radius * COMPONENT_SCALE,
-        COMPONENT_MARGIN
-    );
+    for (let i = 0; i < 28; i++) {
+        const selected = componentTypes[
+            Math.floor(random() * componentTypes.length)
+        ];
 
-    if (!placement) {
-        continue;
-    }
-
-    createComponent(
-        placement.x,
-        placement.z,
-        selected.type
-    );
-
-    occupiedAreas.push(placement);
-}
-
-const ramps = [];
-const rampCount = 12;
-
-const rampMaterial = new THREE.MeshStandardMaterial({
-    color: 0x899b98,
-    metalness: 0.95,
-    roughness: 0.2,
-    emissive: 0x102020
-});
-
-for (let i = 0; i < rampCount; i++) {
-    const placement = findPlacement(
-        2.1,
-        RAMP_MARGIN,
-        -38,
-        38
-    );
-
-    if (!placement) {
-        continue;
-    }
-
-    const {x, z} = placement;
-
-    const ramp = new THREE.Group();
-
-    ramp.position.set(x, 0.06, z);
-    scene.add(ramp);
-
-    const rampContacts = [];
-
-    for (const side of [-1, 1]) {
-        const contact = new THREE.Group();
-
-        const plate = new THREE.Mesh(
-            new THREE.BoxGeometry(1.2, 0.12, 3.4),
-            rampMaterial
+        const placement = findPlacement(
+            selected.radius * COMPONENT_SCALE,
+            COMPONENT_MARGIN
         );
 
-        contact.add(plate);
+        if (!placement) continue;
 
-        const stripe = new THREE.Mesh(
-            new THREE.BoxGeometry(0.08, 0.02, 3.1),
-            padMaterial
+        createComponent(
+            chunk,
+            placement.x,
+            placement.z,
+            selected.type,
+            random
         );
 
-        stripe.position.y = 0.07;
-        contact.add(stripe);
-        contact.position.x = side * 0.6;
-        ramp.add(contact);
+        occupiedAreas.push(placement);
+    }
 
-        rampContacts.push({
-            group: contact,
-            side
+    for (let i = 0; i < 3; i++) {
+        const placement = findPlacement(
+            2.1,
+            RAMP_MARGIN,
+            -18,
+            18
+        );
+
+        if (!placement) continue;
+
+        const {x, z} = placement;
+
+        const ramp = new THREE.Group();
+
+        ramp.position.set(x, 0.06, z);
+        chunk.add(ramp);
+
+        const rampContacts = [];
+
+        for (const side of [-1, 1]) {
+            const contact = new THREE.Group();
+
+            const plate = new THREE.Mesh(
+                new THREE.BoxGeometry(1.2, 0.12, 3.4),
+                rampMaterial
+            );
+
+            contact.add(plate);
+
+            const stripe = new THREE.Mesh(
+                new THREE.BoxGeometry(0.08, 0.02, 3.1),
+                padMaterial
+            );
+
+            stripe.position.y = 0.07;
+            contact.add(stripe);
+
+            contact.position.x = side * 0.6;
+            ramp.add(contact);
+
+            rampContacts.push({
+                group: contact,
+                side
+            });
+        }
+
+        ramps.push({
+            group: ramp,
+            contacts: rampContacts,
+            x: chunkX * CHUNK_SIZE + x,
+            z: chunkZ * CHUNK_SIZE + z,
+            deployment: 0,
+            armed: false,
+            chunkKey
+        });
+
+        occupiedAreas.push({
+            x,
+            z,
+            radius: placement.radius,
+            margin: placement.margin
         });
     }
 
-    ramps.push({
-        group: ramp,
-        contacts: rampContacts,
-        x,
-        z,
-        deployment: 0,
-        armed: false
-    });
-
-    occupiedAreas.push({
-        x,
-        z,
-        radius: placement.radius,
-        margin: placement.margin
-    });
+    loadedChunks.set(chunkKey, chunk);
 }
 
-let verticalVelocity = 0;
-let airborne = false;
+function updateChunks() {
+    const currentChunkX = Math.floor(
+        (player.position.x + CHUNK_SIZE / 2) / CHUNK_SIZE
+    );
+
+    const currentChunkZ = Math.floor(
+        (player.position.z + CHUNK_SIZE / 2) / CHUNK_SIZE
+    );
+
+    for (let x = -CHUNK_RADIUS; x <= CHUNK_RADIUS; x++) {
+        for (let z = -CHUNK_RADIUS; z <= CHUNK_RADIUS; z++) {
+            createChunk(
+                currentChunkX + x,
+                currentChunkZ  + z
+            );
+        }
+    }
+
+    for (const [key, chunk] of loadedChunks) {
+        const [x, z] = key.split(",").map(Number);
+
+        const tooFar =
+            Math.abs(x - currentChunkX) > CHUNK_RADIUS ||
+            Math.abs(z - currentChunkZ) > CHUNK_RADIUS;
+
+        if (tooFar) {
+            scene.remove(chunk);
+
+            chunk.traverse(object => {
+                if (!object.isMesh) return;
+
+                object.geometry.dispose();
+
+                const materials = Array.isArray(object.material)
+                    ? object.material
+                    : [object.material];
+
+                for (const material of materials) {
+                    const sharedMaterials = [
+                        traceMaterial,
+                        padMaterial,
+                        rampMaterial,
+                        ...Object.values(componentMaterials)
+                    ];
+
+                    if (!sharedMaterials.includes(material)) {
+                        material.dispose();
+                    }
+                }
+            });
+
+            loadedChunks.delete(key);
+
+            for (let i = componentHazards.length - 1; i >= 0; i--) {
+                if (componentHazards[i].chunk === chunk) {
+                    componentHazards.splice(i, 1);
+                }
+            }
+
+            for (let i = ramps.length - 1; i >= 0; i--) {
+                if (ramps[i].chunkKey === key) {
+                    ramps.splice(i, 1);
+                }
+            }
+        }
+    }
+}
 
 // 4 Player
 
@@ -597,6 +809,8 @@ const engineLight = new THREE.PointLight(0xff8436, 3, 4);
 engineLight.position.z = 0.9;
 engine.add(engineLight);
 
+updateChunks();
+
 // 6 Camera
 
 camera.position.set(0, 4, 8);
@@ -635,7 +849,85 @@ const velocity = new THREE.Vector3();
 const targetCamera = new THREE.Vector3();
 
 const normalSpeed = 7;
-const boostSpeed = 13;
+const boostSpeed = 20;
+
+let boostEnergy = 1;
+let boostRechargeDelay = 0;
+let boostNeedsFreshPress = false;
+
+let airborne = false;
+let verticalVelocity = 0;
+
+let health = 100;
+let survivalTime = 0;
+let gameOver = false;
+
+const statusElement = document.getElementById("status");
+const scoreValue = document.getElementById("score-value");
+
+function updateHealthStatus() {
+    let status;
+    let color;
+
+    if (health >= 80) {
+        status = "SYSTEM OK";
+        color = "#7dce65";
+    } else if (health >= 30) {
+        status = "SYSTEM WARNING";
+        color = "#e6b84c";
+    } else {
+        status = "SYSTEM CRITICAL";
+        color = "#ff4545";
+    }
+
+    statusElement.innerHTML = `
+        <span class="status-dot"></span>
+        ${status} // ${health}%
+    `;
+
+    const dot = statusElement.querySelector(".status-dot");
+    dot.style.background  = color;
+    dot.style.boxShadow = `0 0 10px ${color}`;
+}
+
+function endGame() {
+    gameOver = true;
+
+    const overlay = document.createElement("div");
+
+    overlay.innerHTML = `
+        <div style="font-size: 30px; font-weight: 700; letter-spacing: 5px;">
+            [SYSTEM] GAME OVER
+        </div>
+        <div style="margin-top: 15px; font-size: 11px; color: #8ca987;">
+            <p>[SYSTEM] WARN - PLAYER.ENGINE.WATTAGE < 30 kW</p>
+            <p>[SYSTEM] FAILED - ENGINEREPAIR.SERVICE</p>
+            <p>[SYSTEM] FAILED - ENGINE.SERVICE</p>
+            <p>[SYSTEM] FAILED - NUCLEARENGINEREACTOR.SERVICE</p>
+            <p>[SYSTEM] CRITICAL - SAFETYNET.SERVICE FAILED. PLAYER.ENGINE.WATTAGE = 17.2 MW</p>
+            <p>[SYSTEM] CRITICAL - PLAYER.ENGINE.TEMP.C > 8192</p>
+            <p>[SYSTEM] CRITICAL - PLAYER.ENGINE() DESTROYED</p>
+            <p>[KERNEL] PROGRAM EXITED WITH CODE 1
+            <p>[KERNEL] PROGRAM RAN FOR ${survivalTime.toFixed(1)} s
+        </div>
+    `;
+
+    overlay.style.cssText = `
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: rgba(10, 16, 10, 0.88);
+        color: #ff4545;
+        font-family: "JetBrains Mono, monospace;
+        text-align: center;
+    `;
+
+    game.appendChild(overlay);
+}
 
 function updatePlayer(delta, time) {
     const forward = keys["KeyW"] || keys ["ArrowUp"];
@@ -644,9 +936,58 @@ function updatePlayer(delta, time) {
     const right = keys["KeyD"] || keys["ArrowRight"];
 
     const boostHeld = keys["ShiftLeft"] || keys["ShiftRight"];
-    const boosting = boostHeld && forward && !backward;
+    const boostRequested = boostHeld && forward && !backward;
+
+    let boosting = false;
+    
+    if (!boostHeld) {
+        boostNeedsFreshPress = false;
+    }
+
+    if (
+        boostRequested &&
+        !boostNeedsFreshPress &&
+        boostEnergy > 0
+    ) {
+        boosting = true;
+
+        boostEnergy = Math.max(
+            0,
+            boostEnergy - delta / BOOST_DRAIN_TIME
+        );
+
+        if (boostEnergy <= 0) {
+            boosting = false;
+            boostNeedsFreshPress = true;
+            boostRechargeDelay = BOOST_RECHARGE_WAIT;
+        }
+    } else {
+        if (boostRechargeDelay > 0) {
+            boostRechargeDelay = Math.max(
+                0,
+                boostRechargeDelay - delta
+            );
+        } else {
+            boostEnergy = Math.min(
+                1,
+                boostEnergy + delta / BOOST_RECHARGE_TIME
+            );
+        }
+    }
 
     const speed = boosting ? boostSpeed : normalSpeed;
+
+    const circumference = 263.9;
+
+    boostProgress.style.strokeDashoffset = circumference * (1 - boostEnergy);
+
+    if (boostEnergy >= 0.999) {
+        boostProgress.style.stroke = "#55e68a";
+    } else if (boostEnergy <= 0.2) {
+        boostProgress.style.stroke = "#ff4545";
+    } else {
+        boostProgress.style.stroke = "#f3f3f3";
+    }
 
     let directionX = 0;
     let directionZ = 0;
@@ -679,6 +1020,29 @@ function updatePlayer(delta, time) {
 
     player.position.x += velocity.x * delta;
     player.position.z += velocity.z * delta;
+
+    for (const hazard of componentHazards) {
+        if (hazard.hit) continue;
+
+        const distance = Math.hypot(
+            player.position.x - hazard.x,
+            player.position.z - hazard.z
+        );
+
+        if (distance < hazard.radius) {
+            hazard.hit = true;
+            health = Math.max(0, health - 10);
+
+            updateHealthStatus();
+
+            if (health <= 0) {
+                endGame();
+                break;
+            }
+        }
+    }
+
+    if (gameOver) return;
 
     for (const ramp of ramps) {
         const distanceX = Math.abs(player.position.x - ramp.x);
@@ -822,8 +1186,14 @@ function animate() {
     const delta = Math.min(clock.getDelta(), 0.05);
     const time = clock.elapsedTime;
 
-    updatePlayer(delta, time);
-    updateCamera(delta);
+    if (!gameOver) {
+        survivalTime += delta;
+        scoreValue.textContent = survivalTime.toFixed(1);
+
+        updatePlayer(delta, time);
+        updateChunks();
+        updateCamera(delta);
+    }
 
     renderer.render(scene, camera);
 }
